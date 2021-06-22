@@ -1,35 +1,68 @@
 #include "Wrappers.h"
+
 #include "../../Code/Code.h"
+#include "../../Objects/Objects.h"
+
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <Psapi.h>
 
-static MODULEINFO GetCurrentModuleInfo()
-{
-	MODULEINFO modinfo = { 0 };
-	HMODULE hModule = GetModuleHandleA(NULL);
-	if (hModule == 0)
-		return modinfo;
-	GetModuleInformation(GetCurrentProcess(), hModule, &modinfo, sizeof(MODULEINFO));
-	return modinfo;
-}
-
-
 void IpcGetFunctionByIndex(const struct IPCMessage_t* Message, struct IPCReply_t* Reply)
 {
-	if (Message->FuncID != IPCID_GetFunctionByIndex)
-	{
-		Reply->AUMIResult = AUMI_INVALID;
-		return;
-	}
-	
 	struct RFunction RFInformation;
-	HMODULE hMod = GetModuleHandleA(NULL);
 
-	AUMIResult result = AiGetIndexFunc(*(int*)(Message->Buffer), &RFInformation, GetCurrentModuleInfo().lpBaseOfDll, GetCurrentModuleInfo().SizeOfImage);
+	AUMIResult result = AiGetFunctionByIndex(*(int*)(Message->Buffer), &RFInformation);
 
 	Reply->AUMIResult = result;
 	memcpy(Reply->Buffer, &RFInformation, sizeof(struct RFunction));
+}
+
+void IpcGetFunctionByName(const struct IPCMessage_t* Message, struct IPCReply_t* Reply)
+{
+	struct RFunction RFInformation;
+	int outIndex;
+	AUMIResult result = AiGetFunctionByName(Message->Buffer, &RFInformation, &outIndex);
+
+	Reply->AUMIResult = result;
+	memcpy(Reply->Buffer, &RFInformation, sizeof(struct RFunction));
+	memcpy(Reply->Buffer + sizeof(struct RFunction), &outIndex, sizeof(int));
+}
+
+void IpcExecuteCode(const struct IPCMessage_t* Message, struct IPCReply_t* Reply)
+{
+	struct
+	{
+		int CodeSize;
+		int LocalsUsed;
+		char Code[512 - (sizeof(int) * 2)];
+	} *CodeBuffer = Message->Buffer;
+
+	struct CCode Code;
+	AUMIResult result;
+	void* g_pGlobal = NULL;
+	struct RValue rv; memset(&rv, 0, sizeof(struct RValue));
+
+	if (result = AiGetGlobalInstance(&g_pGlobal))
+	{
+		Reply->AUMIResult = result;
+		return;
+	}
+
+	if (result = AiCreateCode(&Code, CodeBuffer->Code, CodeBuffer->CodeSize, CodeBuffer->LocalsUsed, "AUMI Code Entry"))
+	{
+		Reply->AUMIResult = result;
+		return;
+	}
+
+	if (result = AiExecuteCode(g_pGlobal, g_pGlobal, &Code, &rv, 0))
+	{
+		Reply->AUMIResult = result;
+		AiDestroyCode(&Code);
+		return;
+	}
+
+	AiDestroyCode(&Code); // Memory leak what?
+	Reply->AUMIResult = AUMI_OK;
 }
 
 void IpcTestCommunication(const struct IPCMessage_t* Message, struct IPCReply_t* Reply)
